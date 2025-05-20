@@ -14,7 +14,7 @@ def conectar():
         port="5432",
         database="EsportsCanarias",
         user="postgres",
-        password="1234"
+        password="postgres"
     )
 
 # Ejecutar SQL y devolver JSON
