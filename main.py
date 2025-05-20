@@ -14,47 +14,74 @@ def conectar():
         port="5432",
         database="EsportsCanarias",
         user="postgres",
-        password="1234"
+        password="postgres"
     )
 
 # Ejecutar SQL y devolver JSON
-def ejecutar_sql(sql):
+def ejecutar_sql(sql, params=None):
     try:
         conn = conectar()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(sql)
+        if params:
+            cur.execute(sql, params)
+        else:
+            cur.execute(sql)
 
         if sql.strip().lower().startswith("select"):
             rows = cur.fetchall()
             cur.close()
             conn.close()
-            return jsonify(rows)
+            return rows  # solo los datos sin jsonify aquí
         else:
             conn.commit()
             cur.close()
             conn.close()
-            return jsonify({"msg": "Operación exitosa"})
+            return {"msg": "Operación exitosa"}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}
+
+
+def ejecutar_sql_params(sql, params=None):
+    try:
+        conn = conectar()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, params)
+
+        if sql.strip().lower().startswith("select"):
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+            return rows
+        else:
+            conn.commit()
+            cur.close()
+            conn.close()
+            return None
+    except Exception as e:
+        print("Error ejecutar_sql:", e)
+        raise e
 
 
 @app.route('/usuario/login', methods=['POST'])
 def login_usuario():
     data = request.json
-    email = data['email']
-    contraseña_plana = data['contraseña']
+    email = data.get('email')
+    contraseña_plana = data.get('contraseña')
 
-    # Buscar el usuario por email
-    sql = f'''SELECT * FROM "Usuario" WHERE email = '{email}' '''
-    result = ejecutar_sql(sql)
+    if not email or not contraseña_plana:
+        return jsonify({"msg": "Email y contraseña son requeridos"}), 400
 
-    if result.status_code != 200 or not result.json:
+    usuarios = ejecutar_sql('SELECT * FROM "Usuario" WHERE email = %s', (email,))
+
+    if isinstance(usuarios, dict) and "error" in usuarios:
+        return jsonify({"msg": "Error en la base de datos"}), 500
+
+    if not usuarios:
         return jsonify({"msg": "Credenciales inválidas"}), 401
 
-    usuario = result.json[0]
+    usuario = usuarios[0]
     hashed = usuario['contraseña']
 
-    # Verificar la contraseña
     if not bcrypt.checkpw(contraseña_plana.encode('utf-8'), hashed.encode('utf-8')):
         return jsonify({"msg": "Credenciales inválidas"}), 401
 
