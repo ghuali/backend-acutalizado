@@ -73,7 +73,14 @@ def login():
         usuario = resultado[0]
         contraseña_hash = usuario['contraseña'].encode('utf-8')
         if bcrypt.checkpw(contraseña_plana.encode('utf-8'), contraseña_hash):
-            return jsonify(usuario)
+
+            user_data = {
+                'id': usuario['id_usuario'],
+                'nombre': usuario['nombre'],
+                'email': usuario['email'],
+                'rol': usuario['rol']
+            }
+            return jsonify(user_data)
     return jsonify({'error': 'Credenciales inválidas'}), 401
 
 
