@@ -18,52 +18,70 @@ def conectar():
     )
 
 # Ejecutar SQL y devolver JSON
-def ejecutar_sql(sql):
+def ejecutar_sql(sql, params=None):
     try:
         conn = conectar()
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(sql)
+        if params:
+            cur.execute(sql, params)
+        else:
+            cur.execute(sql)
 
         if sql.strip().lower().startswith("select"):
             rows = cur.fetchall()
             cur.close()
             conn.close()
-            return jsonify(rows)
+            return rows  # solo los datos sin jsonify aquí
         else:
             conn.commit()
             cur.close()
             conn.close()
-            return jsonify({"msg": "Operación exitosa"})
+            return {"msg": "Operación exitosa"}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}
+
+
+def ejecutar_sql_params(sql, params=None):
+    try:
+        conn = conectar()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, params)
+
+        if sql.strip().lower().startswith("select"):
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+            return rows
+        else:
+            conn.commit()
+            cur.close()
+            conn.close()
+            return None
+    except Exception as e:
+        print("Error ejecutar_sql:", e)
+        raise e
 
 
 @app.route('/usuario/login', methods=['POST'])
-def login_usuario():
+def login():
     data = request.json
     email = data['email']
     contraseña_plana = data['contraseña']
 
-    # Buscar el usuario por email
-    sql = f'''SELECT * FROM "Usuario" WHERE email = '{email}' '''
-    result = ejecutar_sql(sql)
+    resultado = ejecutar_sql('SELECT * FROM "Usuario" WHERE email = %s', (email,))
+    if resultado:
+        usuario = resultado[0]
+        contraseña_hash = usuario['contraseña'].encode('utf-8')
+        if bcrypt.checkpw(contraseña_plana.encode('utf-8'), contraseña_hash):
 
-    if result.status_code != 200 or not result.json:
-        return jsonify({"msg": "Credenciales inválidas"}), 401
-
-    usuario = result.json[0]
-    hashed = usuario['contraseña']
-
-    # Verificar la contraseña
-    if not bcrypt.checkpw(contraseña_plana.encode('utf-8'), hashed.encode('utf-8')):
-        return jsonify({"msg": "Credenciales inválidas"}), 401
-
-    return jsonify({
-        "id": usuario["id_usuario"],
-        "nombre": usuario["nombre"],
-        "rol": usuario["rol"],
-        "email": usuario["email"]
-    })
+            user_data = {
+                'id': usuario['id_usuario'],
+                'nombre': usuario['nombre'],
+                'email': usuario['email'],
+                'rol': usuario['rol']
+            }
+            return jsonify(user_data)
+    return jsonify({'error': 'Credenciales inválidas'}), 401
 
 
 @app.route('/usuario/registro', methods=['POST'])
@@ -72,174 +90,138 @@ def registrar_usuario():
     nombre = data['nombre']
     email = data['email']
     contraseña_plana = data['contraseña']
-
-    # Hashear la contraseña
-    hashed = bcrypt.hashpw(contraseña_plana.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-
-    # Rol predeterminado: 'jugador'
     rol = 'jugador'
 
-    sql = f'''
-    INSERT INTO "Usuario" (nombre, email, contraseña, rol)
-    VALUES ('{nombre}', '{email}', '{hashed}', '{rol}')
+    hashed = bcrypt.hashpw(contraseña_plana.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+    sql = '''
+        INSERT INTO "Usuario" (nombre, email, contraseña, rol)
+        VALUES (%s, %s, %s, %s)
     '''
-    ejecutar_sql(sql)
-    return jsonify({"msg": "Usuario registrado correctamente"})
+    ejecutar_sql(sql, (nombre, email, hashed, rol))
+    return jsonify({'mensaje': 'Usuario registrado correctamente'})
 
-
-@app.route('/juegos/equipos', methods=['GET'])
-def juegos_por_equipos():
-    return ejecutar_sql('''SELECT * FROM "Juego" WHERE es_individual = FALSE''')
-
-@app.route('/torneos/activos', methods=['GET'])
-def torneos_activos():
-    return ejecutar_sql('''
-        SELECT t.id_torneo, t.nombre AS torneo, t.fecha_inicio, t.fecha_fin,
-               j.nombre AS juego, e.nombre AS evento, e.tipo, e.año
-        FROM "Torneo" t
-        INNER JOIN "Juego" j ON t.id_juego = j.id_juego
-        INNER JOIN "Evento" e ON t.id_evento = e.id_evento
-        WHERE t.fecha_fin >= CURRENT_DATE
-        ORDER BY t.fecha_inicio ASC
-    ''')
-
-@app.route('/torneo/clasificacion', methods=['GET'])
-def clasificacion_torneo():
-    torneo_id = request.args.get('id')
-    return ejecutar_sql(f'''
-        SELECT c.id_clasificacion, c.puntos, c.posicion,
-               u.nombre AS usuario, eq.nombre AS equipo
-        FROM "Clasificacion" c
-        LEFT JOIN "Usuario" u ON c.id_usuario = u.id_usuario
-        LEFT JOIN "Equipo" eq ON c.id_equipo = eq.id_equipo
-        WHERE c.id_torneo = {torneo_id}
-        ORDER BY c.posicion ASC
-    ''')
 
 @app.route('/equipo/crear', methods=['POST'])
 def crear_equipo():
     data = request.json
     nombre = data['nombre']
-    fundador = data['fundador']
-    fecha = data['fecha_creacion']
-    return ejecutar_sql(f'''
-        INSERT INTO "Equipo" (nombre, fundador, fecha_creacion)
-        VALUES ('{nombre}', {fundador}, '{fecha}')
-    ''')
+    id_capitan = data['id_capitan']
 
-@app.route('/equipo/unir', methods=['POST'])
-def unir_equipo():
-    data = request.json
-    usuario_id = data['usuario_id']
-    equipo_id = data['equipo_id']
-    return ejecutar_sql(f'''
-        INSERT INTO "UsuarioEquipo" (usuario_id, equipo_id)
-        VALUES ({usuario_id}, {equipo_id})
-    ''')
+    sql = 'INSERT INTO "Equipo" (nombre, id_capitan) VALUES (%s, %s)'
+    ejecutar_sql(sql, (nombre, id_capitan))
+    return jsonify({'mensaje': 'Equipo creado correctamente'})
+
 
 @app.route('/torneo/crear', methods=['POST'])
 def crear_torneo():
-    d = request.json
-    return ejecutar_sql(f'''
-        INSERT INTO "Torneo" (nombre, fecha_inicio, fecha_fin, ubicacion, id_juego, id_evento)
-        VALUES ('{d['nombre']}', '{d['fecha_inicio']}', '{d['fecha_fin']}', '{d['ubicacion']}', {d['id_juego']}, {d['id_evento']})
-    ''')
+    data = request.json
+    nombre = data['nombre']
+    id_evento = data['id_evento']
+    id_juego = data['id_juego']
 
-@app.route('/torneo/unir', methods=['POST'])
-def unir_torneo():
-    d = request.json
-    if d['tipo'] == 'equipo':
-        return ejecutar_sql(f'''
-            INSERT INTO "EquipoTorneo" (equipo_id, torneo_id)
-            VALUES ({d['id']}, {d['torneo_id']})
-        ''')
-    else:
-        return ejecutar_sql(f'''
-            INSERT INTO "UsuarioTorneo" (usuario_id, torneo_id)
-            VALUES ({d['id']}, {d['torneo_id']})
-        ''')
+    sql = 'INSERT INTO "Torneo" (nombre, id_evento, id_juego) VALUES (%s, %s, %s)'
+    ejecutar_sql(sql, (nombre, id_evento, id_juego))
+    return jsonify({'mensaje': 'Torneo creado correctamente'})
 
-@app.route('/torneo/clasificacion', methods=['POST'])
-def crear_clasificacion():
-    d = request.json
-    campos = "id_torneo, puntos, posicion"
-    valores = f"{d['id_torneo']}, {d['puntos']}, {d['posicion']}"
-    if d['tipo'] == 'equipo':
-        campos += ", id_equipo"
-        valores += f", {d['id']}"
-    else:
-        campos += ", id_usuario"
-        valores += f", {d['id']}"
-    return ejecutar_sql(f'''
-        INSERT INTO "Clasificacion" ({campos})
-        VALUES ({valores})
-    ''')
+
+@app.route('/torneos', methods=['GET'])
+def obtener_torneos():
+    datos = ejecutar_sql('SELECT * FROM "Torneo"')
+    return jsonify(datos)
+
 
 @app.route('/eventos', methods=['GET'])
 def obtener_eventos():
-    return ejecutar_sql('''SELECT * FROM "Evento" ORDER BY año DESC, tipo ASC''')
+    datos = ejecutar_sql('SELECT * FROM "Evento"')
+    return jsonify(datos)
+
 
 @app.route('/juegos', methods=['GET'])
 def obtener_juegos():
-    return ejecutar_sql('''SELECT * FROM "Juego" ORDER BY nombre''')
+    datos = ejecutar_sql('SELECT * FROM "Juego"')
+    return jsonify(datos)
 
-@app.route('/usuario/equipos', methods=['GET'])
-def equipos_usuario():
-    usuario_id = request.args.get('id')
-    return ejecutar_sql(f'''
-        SELECT e.id_equipo, e.nombre, e.fecha_creacion
-        FROM "Equipo" e
-        INNER JOIN "UsuarioEquipo" ue ON ue.equipo_id = e.id_equipo
-        WHERE ue.usuario_id = {usuario_id}
-    ''')
 
-@app.route('/usuario/torneos', methods=['GET'])
-def torneos_usuario():
-    usuario_id = request.args.get('id')
-    return ejecutar_sql(f'''
-        SELECT t.id_torneo, t.nombre, t.fecha_inicio, t.fecha_fin
-        FROM "Torneo" t
-        INNER JOIN "UsuarioTorneo" ut ON ut.torneo_id = t.id_torneo
-        WHERE ut.usuario_id = {usuario_id}
-        ORDER BY t.fecha_inicio DESC
-    ''')
+@app.route('/clasificacion/<int:torneo_id>', methods=['GET'])
+def clasificacion_torneo(torneo_id):
+    datos = ejecutar_sql('''
+        SELECT c.id_clasificacion, c.puntos, c.posicion,
+               u.nombre AS usuario, eq.nombre AS equipo
+        FROM "Clasificacion" c
+        LEFT JOIN "Usuario" u ON c.id_usuario = u.id_usuario
+        LEFT JOIN "Equipo" eq ON c.id_equipo = eq.id_equipo
+        WHERE c.id_torneo = %s
+        ORDER BY c.posicion ASC
+    ''', (torneo_id,))
+    return jsonify(datos)
 
-@app.route('/equipo/torneos', methods=['GET'])
-def torneos_equipo():
-    equipo_id = request.args.get('id')
-    return ejecutar_sql(f'''
-        SELECT t.id_torneo, t.nombre, t.fecha_inicio, t.fecha_fin
-        FROM "Torneo" t
-        INNER JOIN "EquipoTorneo" et ON et.torneo_id = t.id_torneo
-        WHERE et.equipo_id = {equipo_id}
-        ORDER BY t.fecha_inicio DESC
-    ''')
 
-@app.route('/equipo/miembros', methods=['GET'])
-def miembros_equipo():
-    equipo_id = request.args.get('id')
-    return ejecutar_sql(f'''
-        SELECT u.id_usuario, u.nombre, u.email
-        FROM "Usuario" u
-        INNER JOIN "UsuarioEquipo" ue ON ue.usuario_id = u.id_usuario
-        WHERE ue.equipo_id = {equipo_id}
-    ''')
+@app.route('/torneo/<int:torneo_id>/equipos', methods=['GET'])
+def equipos_en_torneo(torneo_id):
+    datos = ejecutar_sql('''
+        SELECT e.id_equipo, e.nombre
+        FROM "Participa" p
+        JOIN "Equipo" e ON p.id_equipo = e.id_equipo
+        WHERE p.id_torneo = %s
+    ''', (torneo_id,))
+    return jsonify(datos)
 
-@app.route('/torneo/participantes', methods=['GET'])
-def participantes_torneo():
-    torneo_id = request.args.get('id')
-    return ejecutar_sql(f'''
-        SELECT 'equipo' AS tipo, e.id_equipo AS id, e.nombre
-        FROM "Equipo" e
-        INNER JOIN "EquipoTorneo" et ON et.equipo_id = e.id_equipo
-        WHERE et.torneo_id = {torneo_id}
-        UNION
-        SELECT 'usuario' AS tipo, u.id_usuario AS id, u.nombre
-        FROM "Usuario" u
-        INNER JOIN "UsuarioTorneo" ut ON ut.usuario_id = u.id_usuario
-        WHERE ut.torneo_id = {torneo_id}
-    ''')
 
+@app.route('/torneo/<int:torneo_id>/jugadores', methods=['GET'])
+def jugadores_en_torneo(torneo_id):
+    datos = ejecutar_sql('''
+        SELECT u.id_usuario, u.nombre
+        FROM "Participa" p
+        JOIN "Usuario" u ON p.id_usuario = u.id_usuario
+        WHERE p.id_torneo = %s
+    ''', (torneo_id,))
+    return jsonify(datos)
+
+
+@app.route('/torneo/<int:torneo_id>/partidas', methods=['GET'])
+def partidas_en_torneo(torneo_id):
+    datos = ejecutar_sql('''
+        SELECT p.id_partida, p.fecha_hora, eq1.nombre AS equipo1, eq2.nombre AS equipo2, p.resultado
+        FROM "Partida" p
+        LEFT JOIN "Equipo" eq1 ON p.id_equipo1 = eq1.id_equipo
+        LEFT JOIN "Equipo" eq2 ON p.id_equipo2 = eq2.id_equipo
+        WHERE p.id_torneo = %s
+        ORDER BY p.fecha_hora DESC
+    ''', (torneo_id,))
+    return jsonify(datos)
+
+
+@app.route('/torneo/<int:torneo_id>/clasificacion', methods=['POST'])
+def registrar_clasificacion(torneo_id):
+    data = request.json
+    puntos = data['puntos']
+    posicion = data['posicion']
+    id_usuario = data.get('id_usuario')
+    id_equipo = data.get('id_equipo')
+
+    sql = '''
+        INSERT INTO "Clasificacion" (id_torneo, puntos, posicion, id_usuario, id_equipo)
+        VALUES (%s, %s, %s, %s, %s)
+    '''
+    ejecutar_sql(sql, (torneo_id, puntos, posicion, id_usuario, id_equipo))
+    return jsonify({'mensaje': 'Clasificación registrada correctamente'})
+
+
+@app.route('/torneo/<int:torneo_id>/partida', methods=['POST'])
+def registrar_partida(torneo_id):
+    data = request.json
+    fecha_hora = data['fecha_hora']
+    id_equipo1 = data['id_equipo1']
+    id_equipo2 = data['id_equipo2']
+    resultado = data['resultado']
+
+    sql = '''
+        INSERT INTO "Partida" (id_torneo, fecha_hora, id_equipo1, id_equipo2, resultado)
+        VALUES (%s, %s, %s, %s, %s)
+    '''
+    ejecutar_sql(sql, (torneo_id, fecha_hora, id_equipo1, id_equipo2, resultado))
+    return jsonify({'mensaje': 'Partida registrada correctamente'})
 
 if __name__ == '__main__':
     app.run(debug=True)
