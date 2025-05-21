@@ -155,11 +155,25 @@ def obtener_equipos():
 @app.route('/equipos/por-juego/<int:id_juego>', methods=['GET'])
 def obtener_equipos_por_juego(id_juego):
     sql = '''
-        SELECT DISTINCT e.id_equipo, e.nombre
+        SELECT DISTINCT e.id_equipo, e.nombre, e.victorias, e.derrotas
         FROM "Equipo" e
         JOIN "EquipoTorneo" et ON e.id_equipo = et.equipo_id
         JOIN "Torneo" t ON et.torneo_id = t.id_torneo
         WHERE t.id_juego = %s
+    '''
+    datos = ejecutar_sql(sql, (id_juego,))
+    return jsonify(datos)
+
+
+@app.route('/jugadores/por-juego/<int:id_juego>', methods=['GET'])
+def obtener_jugadores_por_juego(id_juego):
+    sql = '''
+        SELECT DISTINCT u.id_usuario, u.nombre, ji.victorias, ji.derrotas
+        FROM "Usuario" u
+        JOIN "JugadorIndividual" ji ON u.id_usuario = ji.id_usuario
+        JOIN "Juego" j ON ji.id_juego = j.id_juego
+        WHERE j.id_juego = %s AND j.es_individual = TRUE
+        ORDER BY ji.victorias DESC
     '''
     datos = ejecutar_sql(sql, (id_juego,))
     return jsonify(datos)
