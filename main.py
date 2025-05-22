@@ -19,7 +19,7 @@ def conectar():
         port="5432",
         database="EsportsCanarias",
         user="postgres",
-        password="1234"
+        password="postgres"
     )
 
 # -------------------- Ejecutar SQL --------------------
@@ -31,18 +31,27 @@ def ejecutar_sql(sql, params=None):
             cur.execute(sql, params)
         else:
             cur.execute(sql)
+
         if sql.strip().lower().startswith("select"):
             rows = cur.fetchall()
             cur.close()
             conn.close()
             return rows
         else:
-            conn.commit()
-            cur.close()
-            conn.close()
-            return {"msg": "Operación exitosa"}
+            # Si el SQL contiene RETURNING, fetchone o fetchall para obtener resultado
+            if "returning" in sql.lower():
+                rows = cur.fetchall()
+                cur.close()
+                conn.close()
+                return rows
+            else:
+                conn.commit()
+                cur.close()
+                conn.close()
+                return {"msg": "Operación exitosa"}
     except Exception as e:
         return {"error": str(e)}
+
 
 def ejecutar_sql_params(sql, params=None):
     try:
@@ -144,8 +153,6 @@ def login():
     }), 200
 
 
-
-
 @app.route('/usuario/registro', methods=['POST'])
 def registrar_usuario():
     data = request.json
@@ -154,9 +161,36 @@ def registrar_usuario():
     contraseña_plana = data['contraseña']
     rol = 'jugador'
     hashed = bcrypt.hashpw(contraseña_plana.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-    sql = 'INSERT INTO "Usuario" (nombre, email, contraseña, rol) VALUES (%s, %s, %s, %s)'
-    ejecutar_sql(sql, (nombre, email, hashed, rol))
-    return jsonify({'mensaje': 'Usuario registrado correctamente'})
+
+    sql = 'INSERT INTO "Usuario" (nombre, email, contraseña, rol) VALUES (%s, %s, %s, %s) RETURNING id_usuario'
+    result = ejecutar_sql(sql, (nombre, email, hashed, rol))
+
+    if not result or "error" in result:
+        return jsonify({'error': 'Error al crear el usuario'}), 500
+
+    id_usuario = result[0]['id_usuario']
+
+    token = jwt.encode({
+        'usuario': {
+            'id': id_usuario,
+            'nombre': nombre,
+            'rol': rol,
+            'email': email
+        },
+        'exp': datetime.now(timezone.utc) + timedelta(hours=12)
+    }, app.config['SECRET_KEY'], algorithm='HS256')
+
+    return jsonify({
+        'token': token,
+        'usuario': {
+            'id': id_usuario,
+            'nombre': nombre,
+            'rol': rol,
+            'email': email
+        }
+    }), 200
+
+
 
 @app.route('/torneos', methods=['GET'])
 def obtener_torneos():
