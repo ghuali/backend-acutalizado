@@ -19,7 +19,7 @@ def conectar():
         port="5432",
         database="EsportsCanarias",
         user="postgres",
-        password="postgres"
+        password="1234"
     )
 
 # -------------------- Ejecutar SQL --------------------
@@ -242,6 +242,18 @@ def obtener_juegos():
     else:
         datos = ejecutar_sql('SELECT * FROM "Juego"')
     return jsonify(datos)
+
+@app.route('/torneos/por-juego/<int:id_juego>', methods=['GET'])
+def obtener_torneos_por_juego(id_juego):
+    sql = '''
+        SELECT *
+        FROM "Torneo"
+        WHERE id_juego = %s
+        ORDER BY fecha_inicio DESC
+    '''
+    datos = ejecutar_sql(sql, (id_juego,))
+    return jsonify(datos)
+
 
 @app.route('/clasificacion/<int:torneo_id>', methods=['GET'])
 def clasificacion_torneo(torneo_id):
