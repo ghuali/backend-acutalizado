@@ -310,7 +310,18 @@ def jugadores_en_torneo(torneo_id):
     ''', (torneo_id,))
     return jsonify(datos)
 
+# -------------------- Rutas Privadas --------------------
 
+@app.route('/usuario/perfil', methods=['GET'])
+@token_required
+def perfil(usuario):
+    # usuario es el dict que viene del token (id, nombre, rol, email)
+    return jsonify({
+        "id": usuario['id'],
+        "nombre": usuario['nombre'],
+        "rol": usuario['rol'],
+        "email": usuario['email']
+    })
 
 @app.route('/equipo/crear', methods=['POST'])
 @token_required
