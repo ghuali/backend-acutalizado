@@ -311,16 +311,136 @@ def jugadores_en_torneo(torneo_id):
     return jsonify(datos)
 
 
+
 @app.route('/equipo/crear', methods=['POST'])
 @token_required
 def crear_equipo(usuario):
     data = request.json
     nombre = data['nombre']
-    id_fundador = usuario['id']  # Usamos el usuario autenticado como fundador
+    id_fundador = usuario['id']
     fecha_creacion = date.today()
-    sql = 'INSERT INTO "Equipo" (nombre, fundador, fecha_creacion) VALUES (%s, %s, %s)'
-    ejecutar_sql(sql, (nombre, id_fundador, fecha_creacion))
-    return jsonify({'mensaje': 'Equipo creado correctamente'})
+
+    # Inserta el equipo y devuelve el id y código (asumiendo la DB genera el código automáticamente)
+    sql = '''
+        INSERT INTO "Equipo" (nombre, fundador, fecha_creacion)
+        VALUES (%s, %s, %s)
+        RETURNING id_equipo, codigo
+    '''
+    resultado = ejecutar_sql(sql, (nombre, id_fundador, fecha_creacion))
+
+    if isinstance(resultado, dict) and "error" in resultado:
+        return jsonify({'mensaje': 'Error al crear equipo', 'error': resultado['error']}), 500
+
+    if resultado and len(resultado) > 0:
+        id_equipo = resultado[0]['id_equipo']
+        codigo = resultado[0]['codigo']
+
+        # Añadimos al fundador como miembro
+        ejecutar_sql('INSERT INTO "UsuarioEquipo" (usuario_id, equipo_id) VALUES (%s, %s)', (id_fundador, id_equipo))
+
+        equipo_creado = {
+            'id_equipo': id_equipo,
+            'nombre': nombre,
+            'fundador': id_fundador,
+            'fecha_creacion': fecha_creacion.isoformat(),
+            'codigo': codigo,
+            'victorias': 0,
+            'derrotas': 0
+        }
+        return jsonify(equipo_creado), 201
+    else:
+        return jsonify({'mensaje': 'No se pudo crear el equipo'}), 500
+
+
+@app.route('/equipo/salirse', methods=['POST'])
+@token_required
+def salir_del_equipo(usuario):
+    # Buscar equipo al que pertenece el usuario
+    equipo_usuario = ejecutar_sql('SELECT equipo_id FROM "UsuarioEquipo" WHERE usuario_id = %s', (usuario['id'],))
+    if not equipo_usuario or len(equipo_usuario) == 0:
+        return jsonify({'mensaje': 'No perteneces a ningún equipo'}), 400
+
+    id_equipo = equipo_usuario[0]['equipo_id']
+
+    # Obtener fundador del equipo
+    equipo = ejecutar_sql('SELECT fundador FROM "Equipo" WHERE id_equipo = %s', (id_equipo,))
+    if not equipo or len(equipo) == 0:
+        return jsonify({'mensaje': 'Equipo no encontrado'}), 404
+
+    fundador_id = equipo[0]['fundador']
+
+    if usuario['id'] == fundador_id:
+        # Si es fundador, eliminar todos los usuarios de ese equipo y borrar el equipo
+        ejecutar_sql('DELETE FROM "UsuarioEquipo" WHERE equipo_id = %s', (id_equipo,))
+        ejecutar_sql('DELETE FROM "Equipo" WHERE id_equipo = %s', (id_equipo,))
+        return jsonify({'mensaje': 'Te has salido y el equipo ha sido eliminado porque eras el fundador.'})
+    else:
+        # Si no es fundador, solo eliminar la relación de usuario con el equipo
+        ejecutar_sql('DELETE FROM "UsuarioEquipo" WHERE usuario_id = %s AND equipo_id = %s', (usuario['id'], id_equipo))
+        return jsonify({'mensaje': 'Te has salido del equipo correctamente.'})
+
+
+@app.route('/equipo/usuario', methods=['GET'])
+@token_required
+def obtener_equipo_usuario(usuario):
+    equipo = ejecutar_sql('''
+        SELECT e.id_equipo, e.nombre, e.fundador, e.fecha_creacion, e.codigo, e.victorias, e.derrotas
+        FROM "Equipo" e
+        JOIN "UsuarioEquipo" ue ON e.id_equipo = ue.equipo_id
+        WHERE ue.usuario_id = %s
+    ''', (usuario['id'],))
+
+    if equipo and len(equipo) > 0:
+        return jsonify(equipo[0])
+    else:
+        return jsonify({}), 204  # No Content si no tiene equipo
+
+
+@app.route('/equipo/<int:id_equipo>/miembros', methods=['GET'])
+@token_required
+def obtener_miembros_equipo(usuario, id_equipo):
+    sql = '''
+        SELECT u.id_usuario, u.nombre
+        FROM "Usuario" u
+        JOIN "UsuarioEquipo" ue ON u.id_usuario = ue.usuario_id
+        WHERE ue.equipo_id = %s
+    '''
+    miembros = ejecutar_sql(sql, (id_equipo,))
+    return jsonify(miembros)
+
+@app.route('/equipo/codigo/<codigo>', methods=['GET'])
+@token_required
+def obtener_equipo_por_codigo(usuario, codigo):
+    equipo = ejecutar_sql('''
+        SELECT id_equipo, nombre, victorias, derrotas, fundador, fecha_creacion, codigo
+        FROM "Equipo"
+        WHERE codigo = %s
+    ''', (codigo,))
+
+    if equipo and len(equipo) > 0:
+        # Devolvemos el primer (único) resultado
+        return jsonify(equipo[0])
+    else:
+        return jsonify({'mensaje': 'Equipo no encontrado'}), 404
+
+
+@app.route('/equipo/unirse/<codigo>', methods=['POST'])
+@token_required
+def unirse_equipo_por_codigo(usuario, codigo):
+    equipo = ejecutar_sql('SELECT id_equipo FROM "Equipo" WHERE codigo = %s', (codigo,))
+    if not equipo or len(equipo) == 0:
+        return jsonify({'mensaje': 'Código de equipo no válido'}), 404
+
+    # `equipo` es lista, así que accedes al primer elemento con [0]
+    id_equipo = equipo[0]['id_equipo']
+
+    pertenece = ejecutar_sql('SELECT * FROM "UsuarioEquipo" WHERE usuario_id = %s', (usuario['id'],))
+    if pertenece and len(pertenece) > 0:
+        return jsonify({'mensaje': 'Ya perteneces a un equipo'}), 400
+
+    ejecutar_sql('INSERT INTO "UsuarioEquipo" (equipo_id, usuario_id) VALUES (%s, %s)', (id_equipo, usuario['id']))
+    return jsonify({'mensaje': 'Te has unido al equipo correctamente'})
+
 
 
 @app.route('/torneo/crear', methods=['POST'])
