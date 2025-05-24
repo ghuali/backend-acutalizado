@@ -246,6 +246,30 @@ def obtener_torneos_por_juego(id_juego):
     ''', (id_juego,))
     return jsonify(datos)
 
+@app.route('/torneos/completos/<int:id_juego>', methods=['GET'])
+def obtener_torneos_completos(id_juego):
+    datos = ejecutar_sql('''
+        SELECT t.id_torneo, t.nombre, t.fecha_inicio, t.fecha_fin, t.ubicacion,
+               e.id_evento, e.nombre AS nombre_evento
+        FROM "Torneo" t
+        LEFT JOIN "Evento" e ON t.id_evento = e.id_evento
+        WHERE t.id_juego = %s
+        ORDER BY t.fecha_inicio DESC
+    ''', (id_juego,))
+    return jsonify(datos)
+
+@app.route('/torneos/evento/<int:id_evento>', methods=['GET'])
+def obtener_torneos_por_evento(id_evento):
+    datos = ejecutar_sql('''
+        SELECT t.id_torneo, t.nombre, t.fecha_inicio, t.fecha_fin, t.ubicacion,
+               e.id_evento, e.nombre AS nombre_evento
+        FROM "Torneo" t
+        LEFT JOIN "Evento" e ON t.id_evento = e.id_evento
+        WHERE t.id_evento = %s
+        ORDER BY t.fecha_inicio DESC
+    ''', (id_evento,))
+    return jsonify(datos)
+
 
 @app.route('/clasificacion/<int:torneo_id>', methods=['GET'])
 def clasificacion_torneo(torneo_id):
@@ -258,7 +282,10 @@ def clasificacion_torneo(torneo_id):
         WHERE c.id_torneo = %s
         ORDER BY c.posicion ASC
     ''', (torneo_id,))
-    print(datos)
+
+    if not datos:
+        return jsonify({"message": "No hay clasificación para este torneo"}), 404
+
     return jsonify(datos)
 
 
