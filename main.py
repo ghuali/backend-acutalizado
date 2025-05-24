@@ -19,7 +19,7 @@ def conectar():
         port="5432",
         database="EsportsCanarias",
         user="postgres",
-        password="postgres"
+        password="1234"
     )
 
 # -------------------- Ejecutar SQL --------------------
@@ -105,33 +105,18 @@ def admin_required(f):
 @app.route('/usuario/login', methods=['POST'])
 def login():
     data = request.get_json()
-    print('JSON recibido:', data)
     email = data.get('email')
     password = data.get('password')
 
-    if not email:
-        return jsonify({'error': 'El email es requerido'}), 400
-    if not password:
-        return jsonify({'error': 'La contraseña es requerida'}), 400
+    if not email or not password:
+        return jsonify({'error': 'Email y contraseña son requeridos'}), 400
 
     usuario = ejecutar_sql('SELECT * FROM "Usuario" WHERE email = %s', (email,))
-    print('Resultado ejecutar_sql:', usuario)
-
     if not usuario:
         return jsonify({'error': 'Usuario no encontrado'}), 404
+    usuario = usuario[0]
 
-    if isinstance(usuario, list):
-        usuario = usuario[0]
-
-    usuario = dict(usuario)  # por si acaso
-
-    contrasena_hash = usuario.get('contraseña')
-    print(f"contraseña hash: {contrasena_hash} (tipo: {type(contrasena_hash)})")
-
-    if contrasena_hash is None:
-        return jsonify({'error': 'Error interno: hash de contraseña no encontrado'}), 500
-
-    if not bcrypt.checkpw(password.encode('utf-8'), contrasena_hash.encode('utf-8')):
+    if not bcrypt.checkpw(password.encode('utf-8'), usuario['contraseña'].encode('utf-8')):
         return jsonify({'error': 'Contraseña incorrecta'}), 401
 
     token = jwt.encode({
@@ -152,7 +137,7 @@ def login():
             'rol': usuario['rol'],
             'email': usuario['email']
         }
-    }), 200
+    })
 
 
 @app.route('/usuario/registro', methods=['POST'])
@@ -164,30 +149,13 @@ def registrar_usuario():
     rol = 'jugador'
     hashed = bcrypt.hashpw(contraseña_plana.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-    # Insertar usuario
     sql_usuario = 'INSERT INTO "Usuario" (nombre, email, contraseña, rol) VALUES (%s, %s, %s, %s) RETURNING id_usuario'
     result_usuario = ejecutar_sql(sql_usuario, (nombre, email, hashed, rol))
-
     if not result_usuario or "error" in result_usuario:
         return jsonify({'error': 'Error al crear el usuario'}), 500
 
     id_usuario = result_usuario[0]['id_usuario']
 
-    # Obtener todos los juegos individuales
-    sql_juegos = 'SELECT id_juego FROM "Juego" WHERE es_individual = TRUE'
-    juegos_individuales = ejecutar_sql(sql_juegos)
-
-    # Insertar en JugadorIndividual
-    for juego in juegos_individuales:
-        id_juego = juego['id_juego']
-        sql_insert_jugador = """
-            INSERT INTO "JugadorIndividual" (id_usuario, id_juego, victorias, derrotas)
-            VALUES (%s, %s, 0, 0)
-        """
-        resultado_insert = ejecutar_sql(sql_insert_jugador, (id_usuario, id_juego))
-        print(f"Resultado insert jugador individual: {resultado_insert}")
-
-    # Crear token
     token = jwt.encode({
         'usuario': {
             'id': id_usuario,
@@ -206,19 +174,20 @@ def registrar_usuario():
             'rol': rol,
             'email': email
         }
-    }), 200
-
-
+    })
 
 
 @app.route('/torneos', methods=['GET'])
 def obtener_torneos():
-    datos = ejecutar_sql('SELECT * FROM "Torneo"')
+
+    datos = ejecutar_sql('SELECT * FROM "Torneo" ORDER BY fecha_inicio DESC')
     return jsonify(datos)
+
+
 
 @app.route('/eventos', methods=['GET'])
 def obtener_eventos():
-    datos = ejecutar_sql('SELECT * FROM "Evento"')
+    datos = ejecutar_sql('SELECT * FROM "Evento" ORDER BY año DESC')
     return jsonify(datos)
 
 @app.route('/equipos', methods=['GET'])
@@ -226,30 +195,35 @@ def obtener_equipos():
     datos = ejecutar_sql('SELECT * FROM "Equipo"')
     return jsonify(datos)
 
+
+
 @app.route('/equipos/por-juego/<int:id_juego>', methods=['GET'])
 def obtener_equipos_por_juego(id_juego):
+    # Ahora usamos et.id_torneo (la FK correcta) para relacionar equipos con torneos
     sql = '''
         SELECT DISTINCT e.id_equipo, e.nombre, e.victorias, e.derrotas
         FROM "Equipo" e
         JOIN "EquipoTorneo" et ON e.id_equipo = et.equipo_id
-        JOIN "Torneo" t ON et.torneo_id = t.id_torneo
+        JOIN "Torneo" t ON et.id_torneo = t.id_torneo
         WHERE t.id_juego = %s
     '''
     datos = ejecutar_sql(sql, (id_juego,))
     return jsonify(datos)
 
+
 @app.route('/jugadores/por-juego/<int:id_juego>', methods=['GET'])
 def obtener_jugadores_por_juego(id_juego):
     sql = '''
-        SELECT DISTINCT u.id_usuario, u.nombre, ji.victorias, ji.derrotas
+        SELECT u.id_usuario, u.nombre
         FROM "Usuario" u
-        JOIN "JugadorIndividual" ji ON u.id_usuario = ji.id_usuario
-        JOIN "Juego" j ON ji.id_juego = j.id_juego
-        WHERE j.id_juego = %s AND j.es_individual = TRUE
-        ORDER BY ji.victorias DESC
+        JOIN "LigaIndividual" li ON u.id_usuario = li.id_usuario
+        WHERE li.id_juego = %s
+        ORDER BY u.nombre
     '''
     datos = ejecutar_sql(sql, (id_juego,))
     return jsonify(datos)
+
+
 
 @app.route('/juegos', methods=['GET'])
 def obtener_juegos():
@@ -262,15 +236,14 @@ def obtener_juegos():
         datos = ejecutar_sql('SELECT * FROM "Juego"')
     return jsonify(datos)
 
+
 @app.route('/torneos/por-juego/<int:id_juego>', methods=['GET'])
 def obtener_torneos_por_juego(id_juego):
-    sql = '''
-        SELECT *
-        FROM "Torneo"
+    datos = ejecutar_sql('''
+        SELECT * FROM "Torneo"
         WHERE id_juego = %s
         ORDER BY fecha_inicio DESC
-    '''
-    datos = ejecutar_sql(sql, (id_juego,))
+    ''', (id_juego,))
     return jsonify(datos)
 
 
@@ -285,7 +258,9 @@ def clasificacion_torneo(torneo_id):
         WHERE c.id_torneo = %s
         ORDER BY c.posicion ASC
     ''', (torneo_id,))
+    print(datos)
     return jsonify(datos)
+
 
 @app.route('/torneo/<int:torneo_id>/equipos', methods=['GET'])
 def equipos_en_torneo(torneo_id):
@@ -297,6 +272,7 @@ def equipos_en_torneo(torneo_id):
     ''', (torneo_id,))
     return jsonify(datos)
 
+
 @app.route('/torneo/<int:torneo_id>/jugadores', methods=['GET'])
 def jugadores_en_torneo(torneo_id):
     datos = ejecutar_sql('''
@@ -307,22 +283,22 @@ def jugadores_en_torneo(torneo_id):
     ''', (torneo_id,))
     return jsonify(datos)
 
-# -------------------- Rutas Protegidas --------------------
+
 @app.route('/equipo/crear', methods=['POST'])
 @token_required
-def crear_equipo():
+def crear_equipo(usuario):
     data = request.json
     nombre = data['nombre']
-    id_fundador = data['id_capitan']
+    id_fundador = usuario['id']  # Usamos el usuario autenticado como fundador
     fecha_creacion = date.today()
     sql = 'INSERT INTO "Equipo" (nombre, fundador, fecha_creacion) VALUES (%s, %s, %s)'
     ejecutar_sql(sql, (nombre, id_fundador, fecha_creacion))
     return jsonify({'mensaje': 'Equipo creado correctamente'})
 
+
 @app.route('/torneo/crear', methods=['POST'])
-@token_required
 @admin_required
-def crear_torneo():
+def crear_torneo(usuario):
     data = request.json
     nombre = data['nombre']
     fecha_inicio = data['fecha_inicio']
@@ -337,136 +313,105 @@ def crear_torneo():
     ejecutar_sql(sql, (nombre, fecha_inicio, fecha_fin, ubicacion, id_evento, id_juego))
     return jsonify({'mensaje': 'Torneo creado correctamente'})
 
+
 @app.route('/evento/crear', methods=['POST'])
-def crear_evento():
-    datos = request.json
-    nombre = datos.get('nombre')
-    tipo = datos.get('tipo')
-    año = datos.get('año')
-    mes = datos.get('mes')
+@admin_required
+def crear_evento(usuario):
+    data = request.json
+    nombre = data['nombre']
+    tipo = data.get('tipo')
+    if tipo not in ('anual', 'mensual'):
+        return jsonify({'error': 'Tipo de evento inválido, debe ser "anual" o "mensual"'}), 400
+    año = data.get('año')
+    mes = data.get('mes') if tipo == 'mensual' else None
 
-    if tipo not in ['anual', 'mensual']:
-        return jsonify({'error': 'Tipo de evento no válido. Debe ser "anual" o "mensual".'}), 400
-
-    if tipo == 'anual' and not año:
-        return jsonify({'error': 'El campo año es obligatorio para eventos anuales'}), 400
-    if tipo == 'mensual' and (not año or not mes):
-        return jsonify({'error': 'Los campos año y mes son obligatorios para eventos mensuales'}), 400
-
-    sql = """
-        INSERT INTO Evento (nombre, tipo, año, mes)
+    sql = '''
+        INSERT INTO "Evento" (nombre, tipo, año, mes)
         VALUES (%s, %s, %s, %s)
-        RETURNING *;
-    """
-    resultado = ejecutar_sql(sql, (nombre, tipo, año, mes))
-    return jsonify(resultado), 201
+    '''
+    ejecutar_sql(sql, (nombre, tipo, año, mes))
+    return jsonify({'mensaje': 'Evento creado correctamente'})
 
 
-@app.route('/equipos/fundador/<int:id_fundador>', methods=['GET'])
-def obtener_equipos_por_fundador(id_fundador):
-    sql = "SELECT * FROM Equipo WHERE id_fundador = %s"
-    resultado = ejecutar_sql(sql, (id_fundador,))
-    return jsonify(resultado), 200
-
-@app.route('/usuarios/<int:id_usuario>', methods=['PUT'])
+@app.route('/usuario/editar/<int:id_usuario>', methods=['PUT'])
 @token_required
-def editar_usuario(usuario, id_usuario):
-    data = request.get_json()
-    nombre = data.get("nombre")
-    correo = data.get("correo")
-    password = data.get("password")
+def editar_usuario(usuario, id_usuario):  # <-- agregar id_usuario aquí
+    if usuario['rol'] != 'administrador' and usuario['id'] != id_usuario:
+        return jsonify({'error': 'No tienes permisos para editar este usuario'}), 403
 
-    campos = []
-    valores = []
+    data = request.json
+    nombre = data.get('nombre')
+    email = data.get('email')
+    contraseña = data.get('contraseña')
+
+    sql_set = []
+    params = []
 
     if nombre:
-        campos.append('"nombre" = %s')
-        valores.append(nombre)
-    if correo:
-        campos.append('"email" = %s')
-        valores.append(correo)
-    if password:
-        hashed_pw = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-        campos.append('"contraseña" = %s')
-        valores.append(hashed_pw)
+        sql_set.append('nombre = %s')
+        params.append(nombre)
+    if email:
+        sql_set.append('email = %s')
+        params.append(email)
+    if contraseña:
+        hashed = bcrypt.hashpw(contraseña.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        sql_set.append('contraseña = %s')
+        params.append(hashed)
 
-    if not campos:
-        return jsonify({"error": "No se proporcionaron campos a actualizar"}), 400
+    if not sql_set:
+        return jsonify({'error': 'No hay datos para actualizar'}), 400
 
-    sql_update = f'UPDATE "Usuario" SET {", ".join(campos)} WHERE id_usuario = %s'
-    valores.append(id_usuario)
-    resultado = ejecutar_sql(sql_update, valores)
+    params.append(id_usuario)
+    sql = f'UPDATE "Usuario" SET {", ".join(sql_set)} WHERE id_usuario = %s'
+    ejecutar_sql(sql, tuple(params))
 
-    if "error" in resultado:
-        return jsonify({"error": "Error al actualizar el usuario"}), 500
-
-    sql_select = 'SELECT id_usuario, nombre, email, rol FROM "Usuario" WHERE id_usuario = %s'
-    usuario_actualizado = ejecutar_sql(sql_select, (id_usuario,))
-    usuario = usuario_actualizado[0]
-    usuario["id"] = usuario.pop("id_usuario")
-    return jsonify(usuario), 200
+    return jsonify({'mensaje': 'Usuario actualizado'})
 
 
-@app.route('/torneo/<int:torneo_id>/clasificacion', methods=['POST'])
+@app.route('/inscribir/jugador', methods=['POST'])
 @token_required
-def registrar_clasificacion(torneo_id):
+def inscribir_jugador(usuario):
     data = request.json
-    puntos = data['puntos']
-    posicion = data['posicion']
-    id_usuario = data.get('id_usuario')
-    id_equipo = data.get('id_equipo')
-    sql = '''
-        INSERT INTO "Clasificacion" (id_torneo, puntos, posicion, id_usuario, id_equipo)
-        VALUES (%s, %s, %s, %s, %s)
-    '''
-    ejecutar_sql(sql, (torneo_id, puntos, posicion, id_usuario, id_equipo))
-    return jsonify({'mensaje': 'Clasificación registrada correctamente'})
+    if not data:
+        return jsonify({'error': 'JSON inválido o no enviado'}), 400
 
+    id_torneo = data.get('id_torneo')
+    if not id_torneo:
+        return jsonify({'error': 'Falta id_torneo'}), 400
 
-@app.route('/torneo/<int:torneo_id>/unirse', methods=['POST'])
-@token_required
-def unirse_torneo(usuario, torneo_id):
     id_usuario = usuario['id']
 
-    # Verificar que el torneo existe y es individual
-    juego = ejecutar_sql(
-        '''
-        SELECT j.es_individual FROM "Torneo" t
-        JOIN "Juego" j ON t.id_juego = j.id_juego
-        WHERE t.id_torneo = %s
-        ''', (torneo_id,)
-    )
-    if not juego:
+    torneo = ejecutar_sql('SELECT * FROM "Torneo" WHERE id_torneo = %s', (id_torneo,))
+    if not torneo:
         return jsonify({'error': 'Torneo no encontrado'}), 404
-    if not juego[0]['es_individual']:
-        return jsonify({'error': 'Este torneo no es individual'}), 400
+    torneo = torneo[0]
 
-    # Verificar que el usuario es jugador individual en ese juego
-    jugador_individual = ejecutar_sql(
-        'SELECT * FROM "JugadorIndividual" WHERE id_usuario = %s AND id_juego = (SELECT id_juego FROM "Torneo" WHERE id_torneo = %s)',
-        (id_usuario, torneo_id)
-    )
-    if not jugador_individual:
-        return jsonify({'error': 'Solo jugadores individuales pueden unirse por este endpoint'}), 403
+    juego = ejecutar_sql('SELECT * FROM "Juego" WHERE id_juego = %s', (torneo['id_juego'],))
+    if not juego or not juego[0]['es_individual']:
+        return jsonify({'error': 'Este torneo no es para jugadores individuales'}), 403
 
     # Verificar si ya está inscrito
-    inscrito = ejecutar_sql(
-        'SELECT * FROM "UsuarioTorneo" WHERE usuario_id = %s AND torneo_id = %s',
-        (id_usuario, torneo_id)
+    inscritos = ejecutar_sql(
+        'SELECT * FROM "UsuarioTorneo" WHERE usuario_id = %s AND id_torneo = %s',
+        (id_usuario, id_torneo)
     )
-    if inscrito:
-        return jsonify({'error': 'Ya estás inscrito en este torneo'}), 400
+    if inscritos:
+        return jsonify({'error': 'Jugador ya inscrito en este torneo'}), 405
 
-    # Insertar inscripción
-    resultado = ejecutar_sql(
-        'INSERT INTO "UsuarioTorneo" (usuario_id, torneo_id) VALUES (%s, %s)',
-        (id_usuario, torneo_id)
-    )
-    if "error" in resultado:
-        return jsonify({'error': 'Error al inscribirse en el torneo'}), 500
+    try:
+        ejecutar_sql('INSERT INTO "UsuarioTorneo" (usuario_id, id_torneo) VALUES (%s, %s)', (id_usuario, id_torneo))
 
-    return jsonify({'mensaje': 'Inscripción exitosa en el torneo'}), 201
+        # Insertar en Clasificacion con valores iniciales
+        ejecutar_sql(
+            '''INSERT INTO "Clasificacion" 
+               (id_torneo, id_equipo, id_usuario, puntos, posicion)
+               VALUES (%s, %s, %s, %s, %s)''',
+            (id_torneo, None, id_usuario, 0, None)
+        )
+    except Exception as e:
+        return jsonify({'error': f'Error al inscribir jugador: {str(e)}'}), 500
 
+    return jsonify({'mensaje': 'Jugador inscrito en torneo'}), 201
 
 
 @app.route('/torneo/<int:torneo_id>/salir', methods=['POST'])
@@ -474,23 +419,48 @@ def unirse_torneo(usuario, torneo_id):
 def salir_torneo(usuario, torneo_id):
     id_usuario = usuario['id']
 
-    # Verificar que está inscrito
-    inscrito = ejecutar_sql(
-        'SELECT * FROM "UsuarioTorneo" WHERE usuario_id = %s AND torneo_id = %s',
+    torneo = ejecutar_sql('SELECT * FROM "Torneo" WHERE id_torneo = %s', (torneo_id,))
+    if not torneo:
+        return jsonify({'error': 'Torneo no encontrado'}), 404
+
+    inscritos = ejecutar_sql(
+        'SELECT * FROM "UsuarioTorneo" WHERE usuario_id = %s AND id_torneo = %s',
         (id_usuario, torneo_id)
     )
-    if not inscrito:
+    if not inscritos:
         return jsonify({'error': 'No estás inscrito en este torneo'}), 400
 
-    # Borrar la inscripción
-    resultado = ejecutar_sql(
-        'DELETE FROM "UsuarioTorneo" WHERE usuario_id = %s AND torneo_id = %s',
-        (id_usuario, torneo_id)
-    )
-    if "error" in resultado:
-        return jsonify({'error': 'Error al salir del torneo'}), 500
+    try:
+        ejecutar_sql('DELETE FROM "UsuarioTorneo" WHERE usuario_id = %s AND id_torneo = %s', (id_usuario, torneo_id))
+        ejecutar_sql('DELETE FROM "Clasificacion" WHERE id_usuario = %s AND id_torneo = %s', (id_usuario, torneo_id))
+    except Exception as e:
+        return jsonify({'error': f'Error al salir del torneo: {str(e)}'}), 500
 
-    return jsonify({'mensaje': 'Has salido del torneo correctamente'}), 200
+    return jsonify({'mensaje': 'Saliste del torneo correctamente'})
+
+
+@app.route('/inscribir/equipo', methods=['POST'])
+@token_required
+def inscribir_equipo(usuario):
+    data = request.json
+    id_torneo = data['id_torneo']
+    id_equipo = data['id_equipo']
+
+    torneo = ejecutar_sql('SELECT * FROM "Torneo" WHERE id_torneo = %s', (id_torneo,))
+    if not torneo:
+        return jsonify({'error': 'Torneo no encontrado'}), 404
+    torneo = torneo[0]
+
+    # Verificar que torneo es de equipos
+    juego = ejecutar_sql('SELECT * FROM "Juego" WHERE id_juego = %s', (torneo['id_juego'],))
+    if not juego or juego[0]['es_individual']:
+        return jsonify({'error': 'Este torneo no es para equipos'}), 400
+
+    ejecutar_sql('INSERT INTO "EquipoTorneo" (equipo_id, torneo_id) VALUES (%s, %s)', (id_equipo, id_torneo))
+
+    return jsonify({'mensaje': 'Equipo inscrito en torneo'})
+
+
 
 # -------------------- Main --------------------
 if __name__ == '__main__':
