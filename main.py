@@ -333,16 +333,16 @@ def crear_evento(usuario):
     return jsonify({'mensaje': 'Evento creado correctamente'})
 
 
-@app.route('/usuario/editar/<int:id_usuario>', methods=['PUT'])
+@app.route('/usuarios/editar/<int:id_usuario>', methods=['PUT'])
 @token_required
-def editar_usuario(usuario, id_usuario):  # <-- agregar id_usuario aquí
+def editar_usuario(usuario, id_usuario):
     if usuario['rol'] != 'administrador' and usuario['id'] != id_usuario:
         return jsonify({'error': 'No tienes permisos para editar este usuario'}), 403
 
     data = request.json
     nombre = data.get('nombre')
-    email = data.get('email')
-    contraseña = data.get('contraseña')
+    email = data.get('email')  # aquí espera 'email'
+    contraseña = data.get('password')
 
     sql_set = []
     params = []
@@ -362,10 +362,16 @@ def editar_usuario(usuario, id_usuario):  # <-- agregar id_usuario aquí
         return jsonify({'error': 'No hay datos para actualizar'}), 400
 
     params.append(id_usuario)
-    sql = f'UPDATE "Usuario" SET {", ".join(sql_set)} WHERE id_usuario = %s'
-    ejecutar_sql(sql, tuple(params))
+    sql = f'''
+    UPDATE "Usuario" SET {", ".join(sql_set)} WHERE id_usuario = %s
+    RETURNING id_usuario AS id, nombre, rol, email
+    '''
+    resultado = ejecutar_sql(sql, tuple(params))
+    if not resultado or "error" in resultado:
+        return jsonify({'error': 'Error al actualizar usuario'}), 500
 
-    return jsonify({'mensaje': 'Usuario actualizado'})
+    usuario_actualizado = resultado[0]
+    return jsonify(usuario_actualizado)
 
 
 @app.route('/inscribir/jugador', methods=['POST'])
@@ -437,6 +443,67 @@ def salir_torneo(usuario, torneo_id):
         return jsonify({'error': f'Error al salir del torneo: {str(e)}'}), 500
 
     return jsonify({'mensaje': 'Saliste del torneo correctamente'})
+
+@app.route('/unirse/juego-individual', methods=['POST'])
+@token_required
+def unirse_juego_individual(usuario):
+    data = request.json
+    if not data or 'id_juego' not in data:
+        return jsonify({'error': 'Falta id_juego'}), 400
+
+    id_usuario = usuario['id']
+    id_juego = data['id_juego']
+
+    # Verificar que el juego es individual
+    juego = ejecutar_sql('SELECT * FROM "Juego" WHERE id_juego = %s', (id_juego,))
+    if not juego:
+        return jsonify({'error': 'Juego no encontrado'}), 404
+    if not juego[0]['es_individual']:
+        return jsonify({'error': 'El juego no es individual'}), 400
+
+    # Verificar si ya está inscrito en ese juego
+    ya_inscrito = ejecutar_sql('SELECT * FROM "LigaIndividual" WHERE id_usuario = %s AND id_juego = %s', (id_usuario, id_juego))
+    if ya_inscrito:
+        return jsonify({'error': 'Ya estás inscrito en este juego individual'}), 409
+
+    # Insertar inscripción
+    try:
+        ejecutar_sql('INSERT INTO "LigaIndividual" (id_usuario, id_juego) VALUES (%s, %s)', (id_usuario, id_juego))
+    except Exception as e:
+        return jsonify({'error': f'Error al inscribirse en el juego individual: {str(e)}'}), 500
+
+    return jsonify({'mensaje': 'Inscripción al juego individual realizada correctamente'}), 201
+
+@app.route('/salir/juego-individual', methods=['POST'])
+@token_required
+def salir_juego_individual(usuario):
+    data = request.json
+    if not data or 'id_juego' not in data:
+        return jsonify({'error': 'Falta id_juego'}), 400
+
+    id_usuario = usuario['id']
+    id_juego = data['id_juego']
+
+    # Verificar que el juego es individual
+    juego = ejecutar_sql('SELECT * FROM "Juego" WHERE id_juego = %s', (id_juego,))
+    if not juego:
+        return jsonify({'error': 'Juego no encontrado'}), 404
+    if not juego[0]['es_individual']:
+        return jsonify({'error': 'El juego no es individual'}), 400
+
+    # Verificar si está inscrito en ese juego
+    inscrito = ejecutar_sql('SELECT * FROM "LigaIndividual" WHERE id_usuario = %s AND id_juego = %s', (id_usuario, id_juego))
+    if not inscrito:
+        return jsonify({'error': 'No estás inscrito en este juego individual'}), 409
+
+    # Eliminar inscripción
+    try:
+        ejecutar_sql('DELETE FROM "LigaIndividual" WHERE id_usuario = %s AND id_juego = %s', (id_usuario, id_juego))
+    except Exception as e:
+        return jsonify({'error': f'Error al salir del juego individual: {str(e)}'}), 500
+
+    return jsonify({'mensaje': 'Has salido correctamente del juego individual'}), 200
+
 
 
 @app.route('/inscribir/equipo', methods=['POST'])
