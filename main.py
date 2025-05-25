@@ -210,6 +210,18 @@ def obtener_equipos_por_juego(id_juego):
     datos = ejecutar_sql(sql, (id_juego,))
     return jsonify(datos)
 
+@app.route('/equipos/liga/<int:id_juego>', methods=['GET'])
+def obtener_equipos_en_liga(id_juego):
+    sql = '''
+        SELECT e.id_equipo, e.nombre, e.victorias, e.derrotas
+        FROM "Equipo" e
+        JOIN "LigaEquipo" le ON e.id_equipo = le.id_equipo
+        WHERE le.id_juego = %s
+    '''
+    datos = ejecutar_sql(sql, (id_juego,))
+    return jsonify(datos)
+
+
 
 @app.route('/jugadores/por-juego/<int:id_juego>', methods=['GET'])
 def obtener_jugadores_por_juego(id_juego):
@@ -262,13 +274,14 @@ def obtener_torneos_completos(id_juego):
 def obtener_torneos_por_evento(id_evento):
     datos = ejecutar_sql('''
         SELECT t.id_torneo, t.nombre, t.fecha_inicio, t.fecha_fin, t.ubicacion,
-               e.id_evento, e.nombre AS nombre_evento
+               e.id_evento, e.nombre AS nombre_evento, t.id_juego
         FROM "Torneo" t
         LEFT JOIN "Evento" e ON t.id_evento = e.id_evento
         WHERE t.id_evento = %s
         ORDER BY t.fecha_inicio DESC
     ''', (id_evento,))
     return jsonify(datos)
+
 
 
 @app.route('/clasificacion/<int:torneo_id>', methods=['GET'])
@@ -662,28 +675,203 @@ def salir_juego_individual(usuario):
 
     return jsonify({'mensaje': 'Has salido correctamente del juego individual'}), 200
 
+@app.route('/equipo/fundador/<int:id_usuario>', methods=['GET'])
+@token_required
+def get_equipo_por_fundador(usuario, id_usuario):
+    # Verificamos que el usuario autenticado sea el mismo que el solicitado
+    if usuario.get('id') != id_usuario:
+        return jsonify({'error': 'No autorizado para ver este equipo'}), 403
+
+    try:
+        equipo = ejecutar_sql(
+            'SELECT * FROM "Equipo" WHERE fundador = %s',
+            (id_usuario,)
+        )
+        if not equipo:
+            return jsonify({'mensaje': 'No se encontró equipo para este usuario'}), 404
+
+        return jsonify(equipo[0]), 200
+
+    except Exception as e:
+        return jsonify({'error': f'Error al obtener equipo del fundador: {str(e)}'}), 500
 
 
 @app.route('/inscribir/equipo', methods=['POST'])
 @token_required
 def inscribir_equipo(usuario):
     data = request.json
-    id_torneo = data['id_torneo']
-    id_equipo = data['id_equipo']
+    id_torneo = data.get('id_torneo')
+    id_equipo = data.get('id_equipo')
+
+    if not id_torneo or not id_equipo:
+        return jsonify({'error': 'Faltan datos obligatorios (id_torneo, id_equipo)'}), 400
 
     torneo = ejecutar_sql('SELECT * FROM "Torneo" WHERE id_torneo = %s', (id_torneo,))
     if not torneo:
         return jsonify({'error': 'Torneo no encontrado'}), 404
     torneo = torneo[0]
 
-    # Verificar que torneo es de equipos
     juego = ejecutar_sql('SELECT * FROM "Juego" WHERE id_juego = %s', (torneo['id_juego'],))
     if not juego or juego[0]['es_individual']:
         return jsonify({'error': 'Este torneo no es para equipos'}), 400
 
-    ejecutar_sql('INSERT INTO "EquipoTorneo" (equipo_id, torneo_id) VALUES (%s, %s)', (id_equipo, id_torneo))
+    equipo = ejecutar_sql('SELECT * FROM "Equipo" WHERE id_equipo = %s', (id_equipo,))
+    if not equipo:
+        return jsonify({'error': 'Equipo no encontrado'}), 404
 
-    return jsonify({'mensaje': 'Equipo inscrito en torneo'})
+    if equipo[0]['fundador'] != usuario['id']:
+        return jsonify({'error': 'Solo el fundador del equipo puede inscribirlo'}), 403
+
+    ya_inscrito = ejecutar_sql('SELECT * FROM "EquipoTorneo" WHERE equipo_id = %s AND id_torneo = %s', (id_equipo, id_torneo))
+    if ya_inscrito:
+        return jsonify({'error': 'El equipo ya está inscrito en este torneo'}), 400
+
+    try:
+        ejecutar_sql('INSERT INTO "EquipoTorneo" (equipo_id, id_torneo) VALUES (%s, %s)', (id_equipo, id_torneo))
+
+        # Insertar en Clasificacion para el equipo
+        ejecutar_sql(
+            '''INSERT INTO "Clasificacion" (id_torneo, id_equipo, id_usuario, puntos, posicion)
+               VALUES (%s, %s, %s, %s, %s)''',
+            (id_torneo, id_equipo, None, 0, None)
+        )
+    except Exception as e:
+        return jsonify({'error': f'Error al inscribir equipo: {str(e)}'}), 500
+
+    return jsonify({'mensaje': 'Equipo inscrito en torneo'}), 200
+
+
+@app.route('/unirse/juego-equipo', methods=['POST'])
+@token_required
+def unirse_juego_equipo(usuario):
+    print("Usuario recibido:", usuario)
+
+    data = request.json
+    id_juego = data.get('id_juego')
+    id_equipo = data.get('id_equipo')
+
+    if not id_juego or not id_equipo:
+        return jsonify({'error': 'Faltan datos obligatorios (id_juego, id_equipo)'}), 400
+
+    juego = ejecutar_sql('SELECT * FROM "Juego" WHERE id_juego = %s', (id_juego,))
+    if not juego:
+        return jsonify({'error': 'Juego no encontrado'}), 404
+    if juego[0]['es_individual']:
+        return jsonify({'error': 'Este juego no es para equipos'}), 400
+
+    print(f"id_equipo recibido: {id_equipo}, tipo: {type(id_equipo)}")
+    equipo = ejecutar_sql('SELECT fundador FROM "Equipo" WHERE id_equipo = %s', (id_equipo,))
+    print(f"Resultado fundador:", equipo)
+
+    if not equipo:
+        return jsonify({'error': 'Equipo no encontrado'}), 404
+
+    fundador = equipo[0]['fundador']
+    print(f"Fundador en BD: {fundador}, Usuario ID: {usuario.get('id')}")
+
+    if fundador != usuario.get('id'):
+        return jsonify({'error': 'Solo el fundador del equipo puede unirlo a una liga'}), 403
+
+    ya_inscrito = ejecutar_sql(
+        'SELECT * FROM "LigaEquipo" WHERE id_equipo = %s AND id_juego = %s',
+        (id_equipo, id_juego)
+    )
+    if ya_inscrito:
+        return jsonify({'error': 'Este equipo ya está inscrito en la liga de este juego'}), 409
+
+    try:
+        print("Antes:",
+              ejecutar_sql('SELECT * FROM "LigaEquipo" WHERE id_equipo = %s AND id_juego = %s', (id_equipo, id_juego)))
+        ejecutar_sql(
+            'INSERT INTO "LigaEquipo" (id_equipo, id_juego) VALUES (%s, %s)',
+            (id_equipo, id_juego)
+        )
+        print("Después:",
+              ejecutar_sql('SELECT * FROM "LigaEquipo" WHERE id_equipo = %s AND id_juego = %s', (id_equipo, id_juego)))
+
+
+    except Exception as e:
+        return jsonify({'error': f'Error al inscribir equipo en la liga: {str(e)}'}), 500
+
+    return jsonify({'mensaje': 'Equipo inscrito en la liga correctamente'}), 201
+
+@app.route('/salir/juego-equipo', methods=['POST'])
+@token_required
+def salir_juego_equipo(usuario):
+    data = request.json
+    if not data or 'id_juego' not in data or 'id_equipo' not in data:
+        return jsonify({'error': 'Faltan datos (id_juego, id_equipo)'}), 400
+
+    id_juego = data['id_juego']
+    id_equipo = data['id_equipo']
+
+    # Verificar que el juego es para equipos
+    juego = ejecutar_sql('SELECT * FROM "Juego" WHERE id_juego = %s', (id_juego,))
+    if not juego:
+        return jsonify({'error': 'Juego no encontrado'}), 404
+    if juego[0]['es_individual']:
+        return jsonify({'error': 'El juego no es para equipos'}), 400
+
+    # Verificar que el usuario es el fundador del equipo
+    equipo = ejecutar_sql('SELECT * FROM "Equipo" WHERE id_equipo = %s', (id_equipo,))
+    if not equipo:
+        return jsonify({'error': 'Equipo no encontrado'}), 404
+    if equipo[0]['fundador'] != usuario['id']:
+        return jsonify({'error': 'Solo el fundador del equipo puede retirarlo de la liga'}), 403
+
+    # Verificar si está inscrito
+    inscrito = ejecutar_sql(
+        'SELECT * FROM "LigaEquipo" WHERE id_equipo = %s AND id_juego = %s',
+        (id_equipo, id_juego)
+    )
+    if not inscrito:
+        return jsonify({'error': 'El equipo no está inscrito en este juego'}), 409
+
+    try:
+        ejecutar_sql('DELETE FROM "LigaEquipo" WHERE id_equipo = %s AND id_juego = %s', (id_equipo, id_juego))
+    except Exception as e:
+        return jsonify({'error': f'Error al salir del juego de equipos: {str(e)}'}), 500
+
+    return jsonify({'mensaje': 'El equipo ha salido correctamente de la liga'}), 200
+
+
+@app.route('/torneo-equipo/<int:id_torneo>/salir', methods=['POST'])
+@token_required
+def salir_torneo_equipo(usuario, id_torneo):
+    data = request.json
+    id_equipo = data.get('id_equipo')
+    if not id_equipo:
+        return jsonify({'error': 'Falta id_equipo'}), 400
+
+    # Verificar que el torneo existe
+    torneo = ejecutar_sql('SELECT * FROM "Torneo" WHERE id_torneo = %s', (id_torneo,))
+    if not torneo:
+        return jsonify({'error': 'Torneo no encontrado'}), 404
+
+    # Verificar que el usuario es el fundador del equipo
+    equipo = ejecutar_sql('SELECT * FROM "Equipo" WHERE id_equipo = %s', (id_equipo,))
+    if not equipo:
+        return jsonify({'error': 'Equipo no encontrado'}), 404
+    if equipo[0]['fundador'] != usuario['id']:
+        return jsonify({'error': 'Solo el fundador del equipo puede retirarlo del torneo'}), 403
+
+    # Verificar inscripción
+    inscritos = ejecutar_sql(
+        'SELECT * FROM "EquipoTorneo" WHERE equipo_id = %s AND id_torneo = %s',
+        (id_equipo, id_torneo)
+    )
+    if not inscritos:
+        return jsonify({'error': 'El equipo no está inscrito en este torneo'}), 400
+
+    try:
+        ejecutar_sql('DELETE FROM "EquipoTorneo" WHERE equipo_id = %s AND id_torneo = %s', (id_equipo, id_torneo))
+        ejecutar_sql('DELETE FROM "Clasificacion" WHERE id_equipo = %s AND id_torneo = %s', (id_equipo, id_torneo))
+    except Exception as e:
+        return jsonify({'error': f'Error al salir del torneo: {str(e)}'}), 500
+
+    return jsonify({'mensaje': 'El equipo ha salido del torneo correctamente'}), 200
+
+
 
 
 
