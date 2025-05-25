@@ -467,41 +467,9 @@ def unirse_equipo_por_codigo(usuario, codigo):
 
 
 
-@app.route('/torneo/crear', methods=['POST'])
-@admin_required
-def crear_torneo(usuario):
-    data = request.json
-    nombre = data['nombre']
-    fecha_inicio = data['fecha_inicio']
-    fecha_fin = data['fecha_fin']
-    ubicacion = data['ubicacion']
-    id_evento = data['id_evento']
-    id_juego = data['id_juego']
-    sql = '''
-        INSERT INTO "Torneo" (nombre, fecha_inicio, fecha_fin, ubicacion, id_evento, id_juego)
-        VALUES (%s, %s, %s, %s, %s, %s)
-    '''
-    ejecutar_sql(sql, (nombre, fecha_inicio, fecha_fin, ubicacion, id_evento, id_juego))
-    return jsonify({'mensaje': 'Torneo creado correctamente'})
 
 
-@app.route('/evento/crear', methods=['POST'])
-@admin_required
-def crear_evento(usuario):
-    data = request.json
-    nombre = data['nombre']
-    tipo = data.get('tipo')
-    if tipo not in ('anual', 'mensual'):
-        return jsonify({'error': 'Tipo de evento inválido, debe ser "anual" o "mensual"'}), 400
-    año = data.get('año')
-    mes = data.get('mes') if tipo == 'mensual' else None
 
-    sql = '''
-        INSERT INTO "Evento" (nombre, tipo, año, mes)
-        VALUES (%s, %s, %s, %s)
-    '''
-    ejecutar_sql(sql, (nombre, tipo, año, mes))
-    return jsonify({'mensaje': 'Evento creado correctamente'})
 
 
 @app.route('/usuarios/editar/<int:id_usuario>', methods=['PUT'])
@@ -873,6 +841,91 @@ def salir_torneo_equipo(usuario, id_torneo):
 
 
 
+
+
+# -------------------- Admin --------------------
+
+@app.route('/evento/crear', methods=['POST'])
+@admin_required
+def crear_evento(usuario):
+    data = request.json
+    nombre = data.get('nombre')
+    tipo = data.get('tipo')
+    año = data.get('año')
+    mes = data.get('mes')
+
+    # Validaciones básicas
+    if not nombre or not tipo or not año:
+        return jsonify({'error': 'Faltan campos obligatorios: nombre, tipo, año'}), 400
+    if tipo not in ('anual', 'mensual'):
+        return jsonify({'error': 'Tipo de evento inválido, debe ser "anual" o "mensual"'}), 400
+    if tipo == 'mensual' and (mes is None or not (1 <= int(mes) <= 12)):
+        return jsonify({'error': 'Para evento mensual, mes debe estar entre 1 y 12'}), 400
+    if tipo == 'anual':
+        mes = None  # Ignorar mes si es anual
+
+    try:
+        if mes is not None:
+            sql = '''
+                INSERT INTO "Evento" (nombre, tipo, año, mes)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id_evento
+            '''
+            resultado = ejecutar_sql(sql, (nombre, tipo, año, mes))
+        else:
+            sql = '''
+                INSERT INTO "Evento" (nombre, tipo, año)
+                VALUES (%s, %s, %s)
+                RETURNING id_evento
+            '''
+            resultado = ejecutar_sql(sql, (nombre, tipo, año))
+
+        if isinstance(resultado, dict) and 'error' in resultado:
+            return jsonify(resultado), 500
+
+        id_evento = resultado[0]['id_evento']
+        return jsonify({'mensaje': 'Evento creado correctamente', 'id_evento': id_evento})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/torneo/crear', methods=['POST'])
+@admin_required
+def crear_torneo(usuario):
+    data = request.json
+    nombre = data.get('nombre')
+    fecha_inicio = data.get('fecha_inicio')
+    fecha_fin = data.get('fecha_fin')
+    ubicacion = data.get('ubicacion')
+    id_evento = data.get('id_evento')  # Puede ser None
+    id_juego = data.get('id_juego')
+
+    # Validaciones básicas
+    if not nombre or not fecha_inicio or not fecha_fin or not id_juego:
+        return jsonify({'error': 'Faltan campos obligatorios: nombre, fecha_inicio, fecha_fin, id_juego'}), 400
+
+    # Validar que si hay id_evento, exista en la DB
+    if id_evento:
+        existe = ejecutar_sql('SELECT 1 FROM "Evento" WHERE id_evento = %s', (id_evento,))
+        if isinstance(existe, dict) and 'error' in existe:
+            return jsonify(existe), 500
+        if not existe:
+            return jsonify({'error': 'El id_evento proporcionado no existe'}), 400
+
+    try:
+        sql = '''
+            INSERT INTO "Torneo" (nombre, fecha_inicio, fecha_fin, ubicacion, id_evento, id_juego)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id_torneo
+        '''
+        resultado = ejecutar_sql(sql, (nombre, fecha_inicio, fecha_fin, ubicacion, id_evento, id_juego))
+        if isinstance(resultado, dict) and 'error' in resultado:
+            return jsonify(resultado), 500
+
+        id_torneo = resultado[0]['id_torneo']
+        return jsonify({'mensaje': 'Torneo creado correctamente', 'id_torneo': id_torneo})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # -------------------- Main --------------------
